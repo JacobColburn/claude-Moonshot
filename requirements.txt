@@ -1,0 +1,11 @@
+solana==0.35.1
+solders==0.21.0
+requests==2.31.0
+python-dotenv==1.0.1
+base58==2.1.1
+mcp[cli]>=1.0.0
+anthropic>=0.40.0
+praw>=7.7.0
+anchorpy>=0.20.0
+streamlit>=1.35.0
+moonshot-py @ git+https://github.com/ruiqic/moonshot-py.git

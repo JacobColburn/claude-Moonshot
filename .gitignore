@@ -1,0 +1,29 @@
+# Secret keys — NEVER commit these
+.env
+*.env
+.env.*
+!.env.example
+
+# Runtime state
+positions.json
+agent.log
+trader.log
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
