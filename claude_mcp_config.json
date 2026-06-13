@@ -1,0 +1,14 @@
+{
+  "_comment": "Add the 'mcpServers' block below into your ~/.claude/settings.json (global) or .claude/settings.json (project-level). Replace the cwd path and private key.",
+  "mcpServers": {
+    "solana-trader": {
+      "command": "python",
+      "args": ["mcp_server.py"],
+      "cwd": "/path/to/tradeforge-v2",
+      "env": {
+        "SOLANA_PRIVATE_KEY": "YOUR_BASE58_PRIVATE_KEY_HERE",
+        "SOLANA_RPC": "https://api.mainnet-beta.solana.com"
+      }
+    }
+  }
+}
