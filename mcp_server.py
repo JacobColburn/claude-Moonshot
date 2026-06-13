@@ -27,7 +27,10 @@ from mcp.server.fastmcp import FastMCP
 
 import moonshot_trader.config as cfg
 from moonshot_trader import jupiter, market, wallet
+from moonshot_trader.bonding_curve import buy_on_curve, is_on_bonding_curve, sell_on_curve
+from moonshot_trader.moonshot_api import get_new_launches
 from moonshot_trader.positions import Position, PositionBook
+from moonshot_trader.reddit_scanner import scan_reddit_mentions as _scan_reddit
 from moonshot_trader.strategy import check_entry, check_exit
 
 mcp = FastMCP("Moonshot Solana Trader")
@@ -158,6 +161,72 @@ def get_token_info(token_address: str) -> dict:
 
 
 @mcp.tool()
+def scan_new_launches(limit: int = 20) -> dict:
+    """
+    Scan moonshot.money for the most recently launched Solana tokens.
+    These are pre-graduation or newly graduated tokens — highest risk, highest reward.
+    Returns token data enriched with DexScreener price/volume/liquidity info.
+    Call this to find brand-new opportunities before they appear on DexScreener scans.
+    """
+    tokens = get_new_launches(limit=limit)
+    results = []
+    for t in tokens:
+        age_hours = None
+        created = t.get("pairCreatedAt", 0)
+        if created:
+            age_hours = round((time.time() * 1000 - created) / 3_600_000, 2)
+
+        results.append({
+            "mint": t.get("mint", ""),
+            "symbol": t.get("symbol", "?"),
+            "name": t.get("name", ""),
+            "price_usd": t.get("priceUsd", 0),
+            "price_change_1h_pct": float((t.get("priceChange") or {}).get("h1") or 0),
+            "price_change_5m_pct": float((t.get("priceChange") or {}).get("m5") or 0),
+            "volume_1h_usd": float((t.get("volume") or {}).get("h1") or 0),
+            "liquidity_usd": float((t.get("liquidity") or {}).get("usd") or 0),
+            "market_cap_usd": t.get("marketCap", 0),
+            "age_hours": age_hours,
+            "dex": t.get("dex", "moonshot"),
+            "pair_address": t.get("pairAddress", ""),
+        })
+
+    return {
+        "launches": results,
+        "count": len(results),
+        "note": "Sorted newest first. age_hours=None means launch time unknown.",
+    }
+
+
+@mcp.tool()
+def scan_reddit_buzz(max_per_subreddit: int = 15) -> dict:
+    """
+    Scan Reddit (r/CryptoMoonShots, r/SolanaTrading, r/memecoin, r/solana) for
+    trending Solana token mentions. Extracts mint addresses and $TICKER symbols,
+    resolves them via DexScreener. High Reddit score = strong social momentum.
+    Use this to catch community-driven pumps early.
+    """
+    tokens = _scan_reddit(max_per_sub=max_per_subreddit)
+    results = []
+    for t in tokens:
+        results.append({
+            "mint": t.get("mint", ""),
+            "symbol": t.get("baseToken", {}).get("symbol") or t.get("symbol", "?"),
+            "price_usd": float(t.get("priceUsd") or 0),
+            "price_change_1h_pct": float((t.get("priceChange") or {}).get("h1") or 0),
+            "price_change_5m_pct": float((t.get("priceChange") or {}).get("m5") or 0),
+            "volume_1h_usd": float((t.get("volume") or {}).get("h1") or 0),
+            "liquidity_usd": float((t.get("liquidity") or {}).get("usd") or 0),
+            "reddit_subreddit": t.get("reddit_subreddit", ""),
+            "reddit_score": t.get("reddit_score", 0),
+            "reddit_title": t.get("reddit_title", "")[:120],
+        })
+
+    results.sort(key=lambda r: r["reddit_score"], reverse=True)
+    return {"tokens": results, "count": len(results)}
+
+
+@mcp.tool()
 def scan_volatile_tokens(
     min_momentum_5m_pct: float = 4.0,
     min_volume_h1_usd: float = 8000,
@@ -271,38 +340,52 @@ def buy_token(
         pair = market.get_pair_data(token_address)
         decimals = 6
 
-    amount_lamports = jupiter.sol_to_lamports(sol_amount)
-    quote = jupiter.get_quote(
-        input_mint=cfg.SOL_MINT,
-        output_mint=token_address,
-        amount_lamports=amount_lamports,
-        slippage_bps=cfg.SLIPPAGE_BPS,
-    )
-    if not quote:
-        return {"success": False, "error": "Could not get Jupiter quote — token may not be tradeable"}
-
-    out_raw = int(quote.get("outAmount", 0))
-    out_ui = out_raw / (10 ** decimals)
-    price_impact_pct = float(quote.get("priceImpactPct") or 0)
     price_usd = float(pair.get("priceUsd") or 0) if pair else 0
-
-    swap_tx = jupiter.get_swap_transaction(quote, str(pubkey))
-    if not swap_tx:
-        return {"success": False, "error": "Failed to build swap transaction"}
-
-    sig = wallet.sign_and_send(_client, swap_tx, _keypair)
-    if not sig:
-        return {"success": False, "error": "Transaction failed to send"}
-
-    confirmed = wallet.confirm_transaction(_client, sig)
-    if not confirmed:
-        return {
-            "success": False,
-            "error": "Transaction sent but not confirmed within timeout",
-            "tx_signature": sig,
-        }
-
     pair_address = pair.get("pairAddress", "") if pair else ""
+    sig = None
+    out_ui = 0.0
+    route = "jupiter"
+
+    # Try bonding curve first — earliest possible entry for new moonshot launches
+    on_curve = is_on_bonding_curve(token_address, cfg.RPC_ENDPOINT)
+    if on_curve:
+        sig = buy_on_curve(_keypair, cfg.RPC_ENDPOINT, token_address, sol_amount, cfg.SLIPPAGE_BPS)
+        if sig:
+            route = "bonding_curve"
+            decimals = 9  # moonshot tokens use 9 decimals on curve
+            out_ui = (sol_amount * 1e9 / price_usd) if price_usd > 0 else 0
+
+    if not sig:
+        # Graduated token or curve failed — use Jupiter
+        amount_lamports = jupiter.sol_to_lamports(sol_amount)
+        quote = jupiter.get_quote(
+            input_mint=cfg.SOL_MINT,
+            output_mint=token_address,
+            amount_lamports=amount_lamports,
+            slippage_bps=cfg.SLIPPAGE_BPS,
+        )
+        if not quote:
+            return {"success": False, "error": "Could not get Jupiter quote — token may not be tradeable yet"}
+
+        out_raw = int(quote.get("outAmount", 0))
+        out_ui = out_raw / (10 ** decimals)
+
+        swap_tx = jupiter.get_swap_transaction(quote, str(pubkey))
+        if not swap_tx:
+            return {"success": False, "error": "Failed to build swap transaction"}
+
+        sig = wallet.sign_and_send(_client, swap_tx, _keypair)
+        if not sig:
+            return {"success": False, "error": "Transaction failed to send"}
+
+        confirmed = wallet.confirm_transaction(_client, sig)
+        if not confirmed:
+            return {
+                "success": False,
+                "error": "Transaction sent but not confirmed within timeout",
+                "tx_signature": sig,
+            }
+
     pos = Position(
         token_address=token_address,
         token_symbol=token_symbol,
@@ -319,10 +402,10 @@ def buy_token(
     return {
         "success": True,
         "symbol": token_symbol,
+        "route": route,
         "sol_spent": sol_amount,
-        "tokens_received": out_ui,
+        "tokens_received": round(out_ui, 4),
         "entry_price_usd": price_usd,
-        "price_impact_pct": price_impact_pct,
         "tx_signature": sig,
         "explorer_url": f"https://solscan.io/tx/{sig}",
     }
