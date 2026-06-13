@@ -27,6 +27,7 @@ import time
 
 import moonshot_trader.config as cfg
 from moonshot_trader import market, wallet
+from moonshot_trader.bonding_curve import buy_on_curve, is_on_bonding_curve, sell_on_curve
 from moonshot_trader.claude_brain import build_snapshot, decide
 from moonshot_trader.jupiter import get_quote, get_swap_transaction, sol_to_lamports, token_units, lamports_to_sol
 from moonshot_trader.moonshot_api import get_new_launches
@@ -63,34 +64,52 @@ def _execute_buy(
         logger.info("Insufficient SOL for BUY (%.4f available)", size_sol)
         return False
 
-    amount_lamports = sol_to_lamports(size_sol)
-    quote = get_quote(
-        input_mint=SOL_MINT,
-        output_mint=token_address,
-        amount_lamports=amount_lamports,
-        slippage_bps=cfg.SLIPPAGE_BPS,
-    )
-    if not quote:
-        logger.warning("No quote for %s", token_symbol)
-        return False
-
-    out_raw = int(quote.get("outAmount", 0))
-    out_ui = out_raw / (10 ** decimals)
-    logger.info("BUY %s: %.4f SOL → %.4f tokens @ $%.6f", token_symbol, size_sol, out_ui, price_usd)
-
     if dry_run:
-        logger.info("[DRY RUN] Skipping transaction")
+        logger.info("[DRY RUN] BUY %s: %.4f SOL @ $%.6f", token_symbol, size_sol, price_usd)
         return False
 
-    swap_tx = get_swap_transaction(quote, str(keypair.pubkey()))
-    if not swap_tx:
-        return False
-    sig = wallet.sign_and_send(client, swap_tx, keypair)
+    # Try bonding curve first (earliest entry, pre-graduation)
+    on_curve = is_on_bonding_curve(token_address, cfg.RPC_ENDPOINT)
+    sig = None
+    out_ui = 0.0
+
+    if on_curve:
+        logger.info("BUY %s via bonding curve: %.4f SOL @ $%.6f", token_symbol, size_sol, price_usd)
+        sig = buy_on_curve(keypair, cfg.RPC_ENDPOINT, token_address, size_sol, cfg.SLIPPAGE_BPS)
+        if sig:
+            # Estimate token amount from price (curve doesn't return outAmount)
+            out_ui = (size_sol * 1e9 / price_usd) if price_usd > 0 else 0
+            decimals = 9  # moonshot tokens use 9 decimals
+        else:
+            logger.info("Curve buy failed for %s, falling back to Jupiter", token_symbol)
+
     if not sig:
-        return False
-    if not wallet.confirm_transaction(client, sig):
-        logger.warning("BUY tx for %s did not confirm", token_symbol)
-        return False
+        # Graduated token or curve buy failed — use Jupiter
+        amount_lamports = sol_to_lamports(size_sol)
+        quote = get_quote(
+            input_mint=SOL_MINT,
+            output_mint=token_address,
+            amount_lamports=amount_lamports,
+            slippage_bps=cfg.SLIPPAGE_BPS,
+        )
+        if not quote:
+            logger.warning("No quote for %s", token_symbol)
+            return False
+
+        out_raw = int(quote.get("outAmount", 0))
+        out_ui = out_raw / (10 ** decimals)
+        logger.info("BUY %s via Jupiter: %.4f SOL → %.4f tokens @ $%.6f",
+                    token_symbol, size_sol, out_ui, price_usd)
+
+        swap_tx = get_swap_transaction(quote, str(keypair.pubkey()))
+        if not swap_tx:
+            return False
+        sig = wallet.sign_and_send(client, swap_tx, keypair)
+        if not sig:
+            return False
+        if not wallet.confirm_transaction(client, sig):
+            logger.warning("BUY tx for %s did not confirm", token_symbol)
+            return False
 
     pos = Position(
         token_address=token_address,
@@ -104,7 +123,8 @@ def _execute_buy(
         pair_address=pair_address,
     )
     book.add(pos)
-    logger.info("Entered %s at $%.6f  tx=%s", token_symbol, price_usd, sig)
+    logger.info("Entered %s at $%.6f  tx=%s  [%s]",
+                token_symbol, price_usd, sig, "curve" if on_curve else "jupiter")
     return True
 
 
@@ -117,35 +137,48 @@ def _execute_sell(
     if amount_raw <= 0:
         return False
 
-    quote = get_quote(
-        input_mint=token_address,
-        output_mint=SOL_MINT,
-        amount_lamports=amount_raw,
-        slippage_bps=cfg.SLIPPAGE_BPS,
-    )
-    if not quote:
-        logger.warning("No sell quote for %s — keeping position", token_symbol)
-        return False
-
-    out_sol = lamports_to_sol(int(quote.get("outAmount", 0)))
-    logger.info("SELL %s: %.4f tokens → %.4f SOL  [%s]", token_symbol, token_amount, out_sol, reason)
-
     if dry_run:
-        logger.info("[DRY RUN] Skipping transaction")
+        logger.info("[DRY RUN] SELL %s: %.4f tokens  [%s]", token_symbol, token_amount, reason)
         return False
 
-    swap_tx = get_swap_transaction(quote, str(keypair.pubkey()))
-    if not swap_tx:
-        return False
-    sig = wallet.sign_and_send(client, swap_tx, keypair)
+    # Try bonding curve sell first if token is still pre-graduation
+    on_curve = is_on_bonding_curve(token_address, cfg.RPC_ENDPOINT)
+    sig = None
+
+    if on_curve:
+        logger.info("SELL %s via bonding curve: %.4f tokens  [%s]", token_symbol, token_amount, reason)
+        sig = sell_on_curve(keypair, cfg.RPC_ENDPOINT, token_address, token_amount, decimals, cfg.SLIPPAGE_BPS)
+        if not sig:
+            logger.info("Curve sell failed for %s, falling back to Jupiter", token_symbol)
+
     if not sig:
-        return False
-    if not wallet.confirm_transaction(client, sig):
-        logger.warning("SELL tx for %s did not confirm", token_symbol)
-        return False
+        quote = get_quote(
+            input_mint=token_address,
+            output_mint=SOL_MINT,
+            amount_lamports=amount_raw,
+            slippage_bps=cfg.SLIPPAGE_BPS,
+        )
+        if not quote:
+            logger.warning("No sell quote for %s — keeping position", token_symbol)
+            return False
+
+        out_sol = lamports_to_sol(int(quote.get("outAmount", 0)))
+        logger.info("SELL %s via Jupiter: %.4f tokens → %.4f SOL  [%s]",
+                    token_symbol, token_amount, out_sol, reason)
+
+        swap_tx = get_swap_transaction(quote, str(keypair.pubkey()))
+        if not swap_tx:
+            return False
+        sig = wallet.sign_and_send(client, swap_tx, keypair)
+        if not sig:
+            return False
+        if not wallet.confirm_transaction(client, sig):
+            logger.warning("SELL tx for %s did not confirm", token_symbol)
+            return False
 
     book.remove(token_address)
-    logger.info("Exited %s  [%s]  tx=%s", token_symbol, reason, sig)
+    logger.info("Exited %s  [%s]  tx=%s  [%s]",
+                token_symbol, reason, sig, "curve" if on_curve else "jupiter")
     return True
 
 
