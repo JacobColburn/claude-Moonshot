@@ -9,6 +9,8 @@ positions.json
 agent.log
 trader.log
 *.log
+state/
+state_test/
 
 # Python
 __pycache__/

@@ -1,11 +1,19 @@
-solana==0.35.1
-solders==0.21.0
+# ── Core (needed for paper mode + dashboard) ──────────────────────────────
 requests==2.31.0
 python-dotenv==1.0.1
-base58==2.1.1
-mcp[cli]>=1.0.0
 anthropic>=0.40.0
-praw>=7.7.0
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+
+# ── Live trading only (real swaps through your Solana wallet) ──────────────
+# Paper mode does not import these; install them before running LIVE=true.
+solana==0.35.1
+solders==0.21.0
+base58==2.1.1
 anchorpy>=0.20.0
-streamlit>=1.35.0
 moonshot-py @ git+https://github.com/ruiqic/moonshot-py.git
+
+# ── Optional extras from the legacy bot (Reddit scanner, old dashboard) ────
+praw>=7.7.0
+streamlit>=1.35.0
+mcp[cli]>=1.0.0

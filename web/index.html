@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Moonshot Engine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+<div class="aurora"></div>
+
+<header class="topbar glass">
+  <div class="brand">
+    <div class="logo">◎</div>
+    <div>
+      <div class="brand-title">MOONSHOT<span>ENGINE</span></div>
+      <div class="brand-sub" id="brainRead">connecting…</div>
+    </div>
+  </div>
+  <div class="top-meta">
+    <div class="chip" id="modeChip">—</div>
+    <div class="chip" id="brainChip">brain —</div>
+    <div class="chip" id="uptimeChip">up 0s</div>
+    <div class="chip" id="scanChip">scans 0</div>
+    <div class="conn" id="conn"><span class="dot"></span><span id="connText">offline</span></div>
+  </div>
+</header>
+
+<section class="stats">
+  <div class="stat glass" data-accent="violet">
+    <div class="stat-label">Equity</div>
+    <div class="stat-value" id="equity">—</div>
+    <div class="stat-sub"><span id="equityReturn" class="pill">—</span> total return</div>
+  </div>
+  <div class="stat glass" data-accent="green">
+    <div class="stat-label">Realized PnL</div>
+    <div class="stat-value" id="realized">—</div>
+    <div class="stat-sub" id="realizedSub">— closed trades</div>
+  </div>
+  <div class="stat glass" data-accent="cyan">
+    <div class="stat-label">Win Rate</div>
+    <div class="stat-value" id="winrate">—</div>
+    <div class="stat-sub" id="winrateSub">— W / — L</div>
+  </div>
+  <div class="stat glass" data-accent="amber">
+    <div class="stat-label">Cash / Deployed</div>
+    <div class="stat-value" id="cash">—</div>
+    <div class="stat-sub" id="deployed">— in positions</div>
+  </div>
+  <div class="stat glass" data-accent="pink">
+    <div class="stat-label">Open Positions</div>
+    <div class="stat-value" id="openCount">—</div>
+    <div class="stat-sub" id="pfSub">PF —</div>
+  </div>
+</section>
+
+<main class="grid">
+  <section class="panel glass span-2">
+    <div class="panel-head">
+      <h2>Equity Curve</h2>
+      <span class="muted" id="equityNote"></span>
+    </div>
+    <div class="chart-wrap"><canvas id="equityChart"></canvas></div>
+  </section>
+
+  <section class="panel glass">
+    <div class="panel-head"><h2>Live Feed</h2><span class="muted">trades &amp; signals</span></div>
+    <div class="feed" id="feed"></div>
+  </section>
+
+  <section class="panel glass span-2">
+    <div class="panel-head">
+      <h2>Open Positions</h2>
+      <span class="muted" id="posNote">—</span>
+    </div>
+    <div class="positions" id="positions">
+      <div class="empty">No open positions yet.</div>
+    </div>
+  </section>
+
+  <section class="panel glass">
+    <div class="panel-head"><h2>Recent Trades</h2></div>
+    <div class="trades" id="trades"><div class="empty">No closed trades yet.</div></div>
+  </section>
+
+  <section class="panel glass span-3">
+    <div class="panel-head">
+      <h2>Signal Leaderboard</h2>
+      <div class="legend">
+        <span><i style="--c:var(--mom)"></i>mom</span>
+        <span><i style="--c:var(--vol)"></i>vol</span>
+        <span><i style="--c:var(--pre)"></i>buy</span>
+        <span><i style="--c:var(--liq)"></i>liq</span>
+        <span><i style="--c:var(--tur)"></i>turn</span>
+        <span><i style="--c:var(--fre)"></i>fresh</span>
+      </div>
+    </div>
+    <div class="board" id="board"><div class="empty">Scanning the market…</div></div>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
